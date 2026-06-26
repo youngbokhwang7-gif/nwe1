@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#2E6BFF">
+<title>장비콜 · 장비 매칭</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- Firebase (빌드온과 동일한 jajaecall 프로젝트 · 장비콜 데이터는 jangbi_drivers 컬렉션에 분리 저장) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script>
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyAFLRHhZi3wG0EhLCANyEuUlBev3VwIIIQ",
+  authDomain: "jajaecall.firebaseapp.com",
+  projectId: "jajaecall",
+  storageBucket: "jajaecall.firebasestorage.app",
+  messagingSenderId: "653879056602",
+  appId: "1:653879056602:web:46df8d0cc69ae0e1dfade3"
+};
+let JDB=null;
+try{
+  if(!firebase.apps||!firebase.apps.length){firebase.initializeApp(FIREBASE_CONFIG);}
+  JDB=firebase.firestore();
+}catch(e){console.warn('Firebase init 실패',e);}
+const DRIVERS_COL='jangbi_drivers';   // 장비콜 기사 전용 컬렉션
+const CALLS_COL='jangbi_calls';       // 호출 알림 전용 컬렉션
+const ACTIVE_MIN=30;                  // 최근 30분 내 갱신된 기사만 노출
+const CALL_TTL=60;                    // 호출 유효시간(초) — 1분 내 미응답이면 무시
+</script>
+<style>
+  :root{
+    --bg:#FFFFFF;--bg2:#F2F6FF;--card:#FFFFFF;--line:#E3E9F2;
+    --ink:#15202B;--sub:#6B7785;
+    --blue:#2E6BFF;--blue-d:#1B4FD6;--blue-soft:#EAF1FF;--teal:#00C2A8;
+    --ok:#16B364;--ok-d:#0E8E4D;--danger:#F0436A;
+    --radius:16px;--shadow:0 4px 18px rgba(46,107,255,.10);--shadow-lg:0 10px 34px rgba(21,32,43,.14);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;height:100%;}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+    background:var(--bg);color:var(--ink);display:flex;flex-direction:column;height:100dvh;overflow:hidden;}
+  header{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:14px 16px;background:var(--bg);border-bottom:1px solid var(--line);}
+  .logo{font-weight:800;font-size:19px;letter-spacing:-.6px;display:flex;align-items:center;gap:9px;color:var(--ink);}
+  .logo .mk{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,var(--blue),var(--teal));display:flex;align-items:center;justify-content:center;box-shadow:var(--shadow);}
+  .logo .mk svg{width:16px;height:16px;}
+  .logo small{font-weight:700;color:var(--blue);font-size:10px;background:var(--blue-soft);padding:2px 7px;border-radius:6px;letter-spacing:.3px;}
+  .demo-flag{margin-left:auto;font-size:10px;color:#fff;background:linear-gradient(135deg,var(--blue),var(--blue-d));font-weight:800;padding:4px 10px;border-radius:20px;letter-spacing:.4px;}
+  .homeBtn{margin-left:10px;background:var(--bg2);border:1px solid var(--line);color:var(--ink);font-size:13px;font-weight:700;padding:7px 13px;border-radius:20px;cursor:pointer;}
+  .homeBtn:active{transform:translateY(1px);}
+  .screen{flex:1 1 auto;display:none;flex-direction:column;min-height:0;}
+  .screen.active{display:flex;}
+  #login{overflow-y:auto;padding:28px 24px 32px;}
+  .hero-art{width:100%;height:150px;border-radius:20px;margin-bottom:22px;background:linear-gradient(135deg,#3E78FF,#2E6BFF 55%,#1B4FD6);position:relative;overflow:hidden;box-shadow:var(--shadow-lg);display:flex;align-items:flex-end;}
+  .hero-art .grid{position:absolute;inset:0;opacity:.18;background-image:linear-gradient(#fff 1px,transparent 1px),linear-gradient(90deg,#fff 1px,transparent 1px);background-size:26px 26px;}
+  .hero-art .machines{display:flex;gap:6px;align-items:flex-end;padding:0 16px 14px;width:100%;justify-content:space-around;position:relative;z-index:1;}
+  .hero-art .machines svg{height:66px;filter:drop-shadow(0 6px 8px rgba(0,0,0,.22));}
+  .hero{font-size:25px;font-weight:800;letter-spacing:-1px;line-height:1.28;margin-bottom:8px;}
+  .hero b{color:var(--blue);}
+  .hero-sub{color:var(--sub);font-size:14px;margin-bottom:24px;line-height:1.55;}
+  label.fld{display:block;font-size:14px;color:var(--ink);margin:0 0 9px 3px;font-weight:800;}
+  input[type=tel],input[type=text]{width:100%;padding:16px;font-size:16px;border-radius:14px;background:var(--bg);border:1.5px solid var(--line);color:var(--ink);outline:none;transition:.15s;}
+  #phone{min-height:44px;padding:10px 16px;font-size:30px;font-weight:800;text-align:center;letter-spacing:1px;color:var(--blue);border:1.5px solid var(--blue);}
+  #phone::placeholder{color:#9DBBF5;}
+  input::placeholder{color:#A9B4C0;}
+  input:focus{border-color:var(--blue);box-shadow:0 0 0 4px var(--blue-soft);}
+  .role-row{display:flex;gap:12px;margin-top:18px;}
+  .role{flex:1;padding:18px 10px;border-radius:16px;border:1.5px solid var(--blue);background:var(--card);text-align:center;cursor:pointer;transition:.16s;box-shadow:0 2px 8px rgba(21,32,43,.04);}
+  .role .ic{height:46px;display:flex;align-items:center;justify-content:center;}
+  .role .ic svg{height:42px;}
+  .role .t{font-weight:800;margin-top:8px;font-size:15px;}
+  .role .d{font-size:11.5px;color:var(--sub);margin-top:2px;}
+  .role.sel{border-color:var(--blue);background:var(--blue-soft);box-shadow:var(--shadow);}
+  .role.sel .t{color:var(--blue-d);}
+  .btn{width:100%;padding:17px;font-size:16px;font-weight:800;border:none;border-radius:14px;background:linear-gradient(135deg,var(--blue),var(--blue-d));color:#fff;cursor:pointer;margin-top:20px;box-shadow:var(--shadow);transition:.15s;letter-spacing:-.2px;}
+  .btn:active{transform:translateY(1px);}
+  .btn[disabled]{opacity:.4;cursor:default;box-shadow:none;}
+  .btn.ghost{background:var(--bg2);color:var(--ink);box-shadow:none;}
+  .btn-start{width:40%;min-width:160px;display:block;margin-left:auto;margin-right:auto;background:linear-gradient(135deg,#F2730C,#D85A00);box-shadow:0 4px 16px rgba(216,90,0,.38);}
+  .btn-start[disabled]{box-shadow:none;}
+  .note{font-size:11.5px;color:var(--sub);text-align:center;margin-top:16px;line-height:1.55;}
+  #equip{overflow-y:auto;padding:28px 24px;}
+  .equip-row{display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-top:18px;}
+  .equip{flex:1;padding:16px 6px 14px;border-radius:16px;border:1.5px solid var(--line);background:var(--card);text-align:center;cursor:pointer;transition:.16s;box-shadow:0 2px 8px rgba(21,32,43,.04);}
+  .equip .ic{height:56px;display:flex;align-items:center;justify-content:center;}
+  .equip .ic svg{height:50px;}
+  .equip .t{font-size:13.5px;font-weight:800;margin-top:6px;}
+  .equip.sel{border-color:var(--blue);background:var(--blue-soft);box-shadow:var(--shadow);}
+  .equip.sel .t{color:var(--blue-d);}
+  .map-wrap{flex:1 1 auto;position:relative;min-height:0;display:flex;}
+  #map{flex:1 1 auto;width:100%;background:#E8EEF6;z-index:0;}
+  .status-pill{position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:500;background:#fff;border:1px solid var(--line);padding:9px 15px;border-radius:30px;font-size:12.5px;font-weight:700;display:flex;align-items:center;gap:8px;box-shadow:var(--shadow-lg);white-space:nowrap;}
+  .live-dot{width:8px;height:8px;border-radius:50%;background:var(--ok);animation:pulse 1.8s infinite;}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(22,179,100,.5);}70%{box-shadow:0 0 0 9px rgba(22,179,100,0);}100%{box-shadow:0 0 0 0 rgba(22,179,100,0);}}
+  .recenter{position:absolute;right:14px;bottom:calc(var(--sheet-h,220px) + 14px);z-index:500;width:48px;height:48px;border-radius:50%;background:#fff;border:1px solid var(--line);color:var(--blue);font-size:22px;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:var(--shadow-lg);transition:bottom .25s;}
+  .sheet{flex:0 0 auto;background:#fff;border-top:1px solid var(--line);border-radius:22px 22px 0 0;padding:8px 18px calc(16px + env(safe-area-inset-bottom));box-shadow:0 -8px 30px rgba(21,32,43,.10);max-height:48dvh;overflow-y:auto;}
+  .grab{width:38px;height:4px;border-radius:4px;background:var(--line);margin:6px auto 12px;}
+  .sheet h3{margin:0 0 3px;font-size:16.5px;font-weight:800;display:flex;align-items:center;gap:8px;letter-spacing:-.3px;}
+  .sheet .cnt{font-size:13px;color:var(--blue);font-weight:800;}
+  .sheet .sub{font-size:12.5px;color:var(--sub);margin:0 0 14px;}
+  .driver{display:flex;align-items:center;gap:12px;padding:12px;border-radius:14px;background:var(--bg2);border:1px solid var(--line);margin-bottom:10px;transition:.15s;}
+  .driver:active{transform:scale(.99);}
+  .av{width:48px;height:48px;border-radius:13px;background:#fff;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;flex:0 0 auto;}
+  .av svg{height:34px;}
+  .di{flex:1;min-width:0;}
+  .di .nm{font-weight:800;font-size:15px;display:flex;align-items:center;gap:7px;}
+  .badge{font-size:10.5px;font-weight:800;padding:2px 8px;border-radius:20px;background:var(--blue-soft);color:var(--blue-d);}
+  .di .meta{font-size:12px;color:var(--sub);margin-top:4px;display:flex;gap:11px;flex-wrap:wrap;align-items:center;}
+  .dist{color:var(--ok-d);font-weight:800;}
+  .star{color:#F5A623;font-weight:700;}
+  .call{flex:0 0 auto;background:linear-gradient(135deg,var(--ok),var(--ok-d));color:#fff;border:none;font-weight:800;font-size:13.5px;padding:12px 16px;border-radius:13px;cursor:pointer;display:flex;align-items:center;gap:6px;box-shadow:0 4px 12px rgba(22,179,100,.28);}
+  .call:active{transform:translateY(1px);}
+  .dbtns{flex:0 0 auto;display:flex;flex-direction:column;gap:7px;}
+  .dbtns .call,.dbtns .ring{width:100%;justify-content:center;padding:9px 14px;font-size:12.5px;}
+  .ring{background:linear-gradient(135deg,var(--blue),var(--blue-d));color:#fff;border:none;font-weight:800;border-radius:13px;cursor:pointer;display:flex;align-items:center;gap:6px;box-shadow:0 4px 12px rgba(46,107,255,.28);}
+  .ring:active{transform:translateY(1px);}
+  .call-toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);background:#15202B;color:#fff;font-size:13.5px;font-weight:700;padding:13px 20px;border-radius:14px;box-shadow:0 8px 30px rgba(0,0,0,.3);z-index:9999;opacity:0;transition:.25s;max-width:88%;text-align:center;line-height:1.4;pointer-events:none;}
+  .call-toast.on{opacity:1;transform:translateX(-50%) translateY(0);}
+  .toggle-share{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px;border-radius:14px;background:var(--blue-soft);border:1px solid #D4E2FF;margin-bottom:14px;}
+  .toggle-share .lbl{font-weight:800;font-size:14.5px;color:var(--blue-d);}
+  .toggle-share .lbl small{display:block;font-weight:600;color:var(--sub);font-size:11.5px;margin-top:3px;}
+  .sw{width:54px;height:31px;border-radius:31px;background:#C9D3E0;position:relative;cursor:pointer;flex:0 0 auto;transition:.2s;}
+  .sw::after{content:"";position:absolute;top:3px;left:3px;width:25px;height:25px;border-radius:50%;background:#fff;transition:.2s;box-shadow:0 2px 5px rgba(0,0,0,.2);}
+  .sw.on{background:var(--ok);}
+  .sw.on::after{left:26px;}
+  .reqbox{padding:15px;border-radius:14px;background:#fff;border:1.5px solid var(--blue);margin-bottom:10px;box-shadow:var(--shadow);}
+  .reqbox .rt{font-weight:800;font-size:14.5px;color:var(--blue-d);display:flex;align-items:center;gap:7px;}
+  .reqbox .rm{font-size:12.5px;color:var(--sub);margin-top:6px;line-height:1.5;}
+  .reqbox .ra{display:flex;gap:9px;margin-top:13px;}
+  .reqbox .ra button{flex:1;padding:12px;border-radius:12px;border:none;font-weight:800;font-size:13.5px;cursor:pointer;}
+  .acc{background:linear-gradient(135deg,var(--ok),var(--ok-d));color:#fff;box-shadow:0 4px 12px rgba(22,179,100,.28);}
+  .rej{background:var(--bg2);color:var(--sub);}
+  .empty{text-align:center;color:var(--sub);font-size:13px;padding:26px 0;line-height:1.7;}
+  .spin{display:inline-block;width:16px;height:16px;border:2.5px solid var(--line);border-top-color:var(--blue);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-3px;}
+  @keyframes sp{to{transform:rotate(360deg);}}
+  .topbtn{margin-left:auto;background:none;border:none;color:var(--blue);font-size:13px;font-weight:700;cursor:pointer;}
+  .pin{filter:drop-shadow(0 4px 5px rgba(0,0,0,.3));}
+  .me-ring{width:22px;height:22px;border-radius:50%;background:rgba(46,107,255,.25);border:3px solid var(--blue);box-shadow:0 0 0 5px rgba(46,107,255,.14);}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <g id="g-fork">
+    <rect x="20" y="20" width="30" height="22" rx="3" fill="#FFC400"/>
+    <rect x="24" y="10" width="20" height="14" rx="2" fill="#2E6BFF"/>
+    <rect x="26" y="13" width="16" height="8" rx="1" fill="#BFD6FF"/>
+    <rect x="52" y="6" width="4" height="40" fill="#37445A"/>
+    <rect x="56" y="30" width="14" height="3" fill="#37445A"/>
+    <rect x="56" y="38" width="14" height="3" fill="#37445A"/>
+    <circle cx="28" cy="48" r="7" fill="#2B3340"/><circle cx="28" cy="48" r="3" fill="#8893A3"/>
+    <circle cx="46" cy="48" r="7" fill="#2B3340"/><circle cx="46" cy="48" r="3" fill="#8893A3"/>
+  </g>
+  <g id="g-exc">
+    <rect x="10" y="44" width="56" height="9" rx="4.5" fill="#2B3340"/>
+    <circle cx="18" cy="48.5" r="3" fill="#8893A3"/><circle cx="38" cy="48.5" r="3" fill="#8893A3"/><circle cx="58" cy="48.5" r="3" fill="#8893A3"/>
+    <rect x="20" y="26" width="26" height="18" rx="3" fill="#FFC400"/>
+    <rect x="24" y="20" width="16" height="10" rx="2" fill="#2E6BFF"/>
+    <rect x="26" y="22" width="12" height="6" rx="1" fill="#BFD6FF"/>
+    <path d="M44 30 L60 18 L66 24 L54 36 Z" fill="#E0A800"/>
+    <path d="M60 18 L70 30 L62 34 L56 24 Z" fill="#FFC400"/>
+    <path d="M62 33 L72 31 L70 40 L60 38 Z" fill="#37445A"/>
+  </g>
+  <g id="g-crane">
+    <rect x="14" y="44" width="46" height="9" rx="4.5" fill="#2B3340"/>
+    <circle cx="22" cy="48.5" r="3" fill="#8893A3"/><circle cx="40" cy="48.5" r="3" fill="#8893A3"/><circle cx="54" cy="48.5" r="3" fill="#8893A3"/>
+    <rect x="24" y="30" width="20" height="14" rx="3" fill="#FFC400"/>
+    <rect x="28" y="24" width="12" height="8" rx="2" fill="#2E6BFF"/>
+    <rect x="33" y="6" width="4" height="26" fill="#37445A"/>
+    <path d="M35 8 L66 14 L35 14 Z" fill="#FFC400" stroke="#E0A800"/>
+    <line x1="60" y1="13" x2="60" y2="26" stroke="#37445A" stroke-width="2"/>
+    <rect x="56" y="26" width="8" height="5" rx="1" fill="#37445A"/>
+  </g>
+  <g id="g-aerial">
+    <rect x="10" y="44" width="44" height="9" rx="3" fill="#2B3340"/>
+    <circle cx="18" cy="48.5" r="4" fill="#2B3340"/><circle cx="18" cy="48.5" r="2" fill="#8893A3"/>
+    <circle cx="30" cy="48.5" r="4" fill="#2B3340"/><circle cx="30" cy="48.5" r="2" fill="#8893A3"/>
+    <circle cx="46" cy="48.5" r="4" fill="#2B3340"/><circle cx="46" cy="48.5" r="2" fill="#8893A3"/>
+    <rect x="12" y="34" width="40" height="11" rx="2" fill="#FFC400"/>
+    <rect x="14" y="36" width="10" height="7" rx="1" fill="#2E6BFF"/>
+    <line x1="26" y1="40" x2="58" y2="14" stroke="#E0A800" stroke-width="6" stroke-linecap="round"/>
+    <line x1="26" y1="40" x2="58" y2="14" stroke="#FFC400" stroke-width="3" stroke-linecap="round"/>
+    <rect x="52" y="6" width="16" height="10" rx="2" fill="none" stroke="#37445A" stroke-width="2.4"/>
+  </g>
+  <g id="g-client">
+    <rect x="20" y="12" width="32" height="40" rx="4" fill="#2E6BFF"/>
+    <rect x="24" y="16" width="24" height="32" rx="2" fill="#fff"/>
+    <rect x="28" y="8" width="16" height="8" rx="2" fill="#1B4FD6"/>
+    <rect x="28" y="24" width="16" height="2.6" rx="1.3" fill="#BFD6FF"/>
+    <rect x="28" y="30" width="16" height="2.6" rx="1.3" fill="#BFD6FF"/>
+    <rect x="28" y="36" width="10" height="2.6" rx="1.3" fill="#BFD6FF"/>
+  </g>
+</defs></svg>
+
+<header>
+  <div class="logo">
+    <span class="mk"><svg viewBox="0 0 24 24" fill="none"><path d="M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z" fill="#fff"/><circle cx="12" cy="9" r="2.6" fill="#2E6BFF"/></svg></span>
+    장비콜 <small>BETA</small>
+  </div>
+  <span class="demo-flag" id="demoFlag">BETA</span>
+  <button class="homeBtn" id="homeBtn" onclick="goHome()" style="display:none;">✕ 닫기</button>
+</header>
+
+<section class="screen active" id="login">
+  <div class="hero-art">
+    <div class="grid"></div>
+    <div class="machines">
+      <svg viewBox="0 0 80 56"><use href="#g-fork"/></svg>
+      <svg viewBox="0 0 80 56"><use href="#g-exc"/></svg>
+      <svg viewBox="0 0 80 56"><use href="#g-crane"/></svg>
+      <svg viewBox="0 0 80 56"><use href="#g-aerial"/></svg>
+    </div>
+  </div>
+  <div class="hero">필요한 <b>장비</b>,<br>가까운 <b>현장</b>과 바로 연결</div>
+  <div class="hero-sub">지게차·굴착기·크레인 — 휴대폰 번호만으로<br>주변 기사와 발주자를 위치 기반으로 매칭합니다.</div>
+  <label class="fld">휴대폰 번호</label>
+  <input type="tel" id="phone" inputmode="numeric" placeholder="010-0000-0000" maxlength="13" autocomplete="off">
+  <div class="role-row">
+    <div class="role" data-role="driver" onclick="pickRole(this,'driver')">
+      <div class="ic"><svg viewBox="0 0 80 56"><use href="#g-fork"/></svg></div>
+      <div class="t">기사님</div>
+    </div>
+    <div class="role" data-role="client" onclick="pickRole(this,'client')">
+      <div class="ic"><svg viewBox="0 0 72 60"><use href="#g-client"/></svg></div>
+      <div class="t">현장</div>
+    </div>
+  </div>
+  <button class="btn btn-start" id="startBtn" disabled onclick="enter()">시작하기</button>
+  <div class="note">휴대폰 번호만 입력하면 바로 시작됩니다 · 별도 인증 없음<br>입력한 번호로 통화가 연결되니 정확히 입력해 주세요.</div>
+</section>
+
+<section class="screen" id="equip">
+  <div class="hero" style="font-size:23px;">어떤 장비를<br>운행하시나요?</div>
+  <div class="hero-sub">선택한 장비로 주변 발주자에게 노출됩니다.</div>
+  <div class="equip-row">
+    <div class="equip" onclick="pickEquip(this,'지게차','g-fork')"><div class="ic"><svg viewBox="0 0 80 56"><use href="#g-fork"/></svg></div><div class="t">지게차</div></div>
+    <div class="equip" onclick="pickEquip(this,'굴착기','g-exc')"><div class="ic"><svg viewBox="0 0 80 56"><use href="#g-exc"/></svg></div><div class="t">굴착기</div></div>
+    <div class="equip" onclick="pickEquip(this,'크레인','g-crane')"><div class="ic"><svg viewBox="0 0 80 56"><use href="#g-crane"/></svg></div><div class="t">크레인</div></div>
+    <div class="equip" onclick="pickEquip(this,'고소작업대','g-aerial')"><div class="ic"><svg viewBox="0 0 80 56"><use href="#g-aerial"/></svg></div><div class="t">고소작업대</div></div>
+  </div>
+  <button class="btn" id="equipBtn" disabled onclick="goMap()">위치 공유 시작</button>
+  <button class="btn ghost" onclick="back('login')">뒤로</button>
+</section>
+
+<section class="screen" id="mapScreen">
+  <div class="map-wrap">
+    <div id="map"></div>
+    <div class="status-pill"><span class="live-dot"></span><span id="statusTxt">위치 확인 중…</span></div>
+    <div class="recenter" onclick="recenter()">◎</div>
+  </div>
+  <div class="sheet" id="clientSheet" style="display:none;">
+    <div class="grab"></div>
+    <h3>주변 기사 <span class="cnt" id="dCount">0대</span><button class="topbtn" onclick="rescan()">↻ 새로고침</button></h3>
+    <p class="sub">가까운 순으로 표시됩니다. 통화 버튼으로 바로 연결하세요.</p>
+    <div id="driverList"></div>
+  </div>
+  <div class="sheet" id="driverSheet" style="display:none;">
+    <div class="grab"></div>
+    <div class="toggle-share">
+      <div class="lbl">위치 공유<small id="shareSub">발주자에게 내 위치를 노출합니다</small></div>
+      <div class="sw on" id="shareSw" onclick="toggleShare()"></div>
+    </div>
+    <h3>내 노출 상태 <span class="cnt" id="reqCount">노출 중</span></h3>
+    <div id="reqList"><div class="empty">발주자에게 내 위치가 노출되고 있습니다.<br>호출이 오면 발주자가 직접 전화합니다.</div></div>
+  </div>
+</section>
+
+<script>
+const S={role:null,phone:null,equip:null,equipIcon:null,me:null,map:null,meMarker:null,driverMarkers:[],drivers:[],sharing:true,watchId:null,myId:null,unsub:null,pushTimer:null,callUnsub:null,outCallUnsub:null,shownCalls:{}};
+const phoneEl=document.getElementById('phone');
+phoneEl.addEventListener('input',e=>{
+  let v=e.target.value.replace(/\D/g,'').slice(0,11);
+  if(v.length<4)e.target.value=v;else if(v.length<8)e.target.value=v.slice(0,3)+'-'+v.slice(3);
+  else e.target.value=v.slice(0,3)+'-'+v.slice(3,7)+'-'+v.slice(7);
+  validate();
+});
+function pickRole(el,r){document.querySelectorAll('.role').forEach(x=>x.classList.remove('sel'));el.classList.add('sel');S.role=r;validate();}
+function validate(){document.getElementById('startBtn').disabled=!(phoneEl.value.replace(/\D/g,'').length>=10&&S.role);}
+function show(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');document.getElementById('homeBtn').style.display=id==='login'?'none':'inline-block';}
+function back(id){show(id);}
+function goHome(){
+  if(!confirm('홈 화면으로 돌아갈까요?\n현재 위치 공유 / 매칭이 종료됩니다.'))return;
+  if(S.watchId!=null&&navigator.geolocation){navigator.geolocation.clearWatch(S.watchId);S.watchId=null;}
+  if(S.pushTimer){clearInterval(S.pushTimer);S.pushTimer=null;}
+  if(S.unsub){S.unsub();S.unsub=null;}
+  if(S.callUnsub){S.callUnsub();S.callUnsub=null;}
+  if(S.outCallUnsub){S.outCallUnsub();S.outCallUnsub=null;}
+  S.shownCalls={};
+  if(S.role==='driver')removeDriver();   // 내 위치 등록 삭제
+  S.driverMarkers.forEach(m=>{try{S.map.removeLayer(m);}catch(e){}});S.driverMarkers=[];S.drivers=[];
+  S.role=null;S.equip=null;S.equipIcon=null;S.sharing=true;S.myId=null;
+  document.querySelectorAll('.role,.equip').forEach(x=>x.classList.remove('sel'));
+  document.getElementById('equipBtn').disabled=true;document.getElementById('startBtn').disabled=true;
+  phoneEl.value='';show('login');
+}
+// 앱 닫기/새로고침 시에도 기사 등록 정리
+window.addEventListener('beforeunload',()=>{if(S.role==='driver')removeDriver();});
+function enter(){S.phone=phoneEl.value;if(S.role==='driver')show('equip');else{S.equip=null;goMap();}}
+function pickEquip(el,name,icon){document.querySelectorAll('.equip').forEach(x=>x.classList.remove('sel'));el.classList.add('sel');S.equip=name;S.equipIcon=icon;document.getElementById('equipBtn').disabled=false;}
+function svgPin(useId,size){return `<div class="pin"><svg viewBox="0 0 80 56" style="height:${size||38}px"><use href="#${useId}"/></svg></div>`;}
+function goMap(){show('mapScreen');document.getElementById('clientSheet').style.display=S.role==='client'?'block':'none';document.getElementById('driverSheet').style.display=S.role==='driver'?'block':'none';setTimeout(initMap,60);}
+function initMap(){
+  if(S.map){locate();return;}
+  S.map=L.map('map',{zoomControl:false,attributionControl:false}).setView([37.2410,127.1776],14);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(S.map);
+  L.control.attribution({prefix:false,position:'bottomleft'}).addAttribution('© OpenStreetMap').addTo(S.map);
+  syncSheetHeight();locate();
+}
+function setStatus(t){document.getElementById('statusTxt').innerHTML=t;}
+function locate(){setStatus('위치 확인 중…');if(!navigator.geolocation){onLoc(37.2410,127.1776,true);return;}
+  navigator.geolocation.getCurrentPosition(p=>onLoc(p.coords.latitude,p.coords.longitude,false),()=>onLoc(37.2410,127.1776,true),{enableHighAccuracy:true,timeout:8000});}
+function onLoc(lat,lng,fallback){
+  S.me={lat,lng};S.map.setView([lat,lng],15);
+  const ic=S.role==='driver'?L.divIcon({className:'',html:svgPin(S.equipIcon||'g-fork',36),iconSize:[40,32],iconAnchor:[20,28]}):L.divIcon({className:'',html:`<div class="me-ring"></div>`,iconSize:[22,22],iconAnchor:[11,11]});
+  if(S.meMarker)S.meMarker.setLatLng([lat,lng]);else S.meMarker=L.marker([lat,lng],{icon:ic,zIndexOffset:1000}).addTo(S.map);
+  setStatus(`<b style="color:var(--ok)">실시간</b> · ${fallback?'데모 위치(용인)':'내 위치'} 공유 중`);
+  // 위치 실시간 추적 (기사·발주자 공통)
+  if(navigator.geolocation && S.watchId==null){
+    S.watchId=navigator.geolocation.watchPosition(p=>onMove(p.coords.latitude,p.coords.longitude),()=>{},{enableHighAccuracy:true,maximumAge:5000,timeout:15000});
+  }
+  if(S.role==='client')startClientMode();else startDriverMode();
+}
+function onMove(lat,lng){
+  S.me={lat,lng};
+  if(S.meMarker)S.meMarker.setLatLng([lat,lng]);
+  if(S.role==='driver'&&S.sharing)pushDriver();          // 기사: 내 위치 서버 갱신
+  if(S.role==='client'&&S.drivers.length)renderDrivers();// 발주자: 거리 재계산
+}
+function recenter(){if(S.me)S.map.setView([S.me.lat,S.me.lng],15);}
+function dist(a,b){const R=6371,dLat=(b.lat-a.lat)*Math.PI/180,dLng=(b.lng-a.lng)*Math.PI/180;const x=Math.sin(dLat/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLng/2)**2;return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));}
+function fmtDist(km){return km<1?Math.round(km*1000)+'m':km.toFixed(1)+'km';}
+const NAMES=['김','이','박','최','정','강','조','윤','장','임'];
+const EQUIPS=[['지게차','g-fork'],['굴착기','g-exc'],['크레인','g-crane'],['고소작업대','g-aerial']];
+function eqIcon(name){const f=EQUIPS.find(e=>e[0]===name);return f?f[1]:'g-fork';}
+function rnd(a,b){return a+Math.random()*(b-a);}
+
+/* ========== 기사 모드: Firestore에 내 위치 등록·갱신 ========== */
+function startDriverMode(){
+  if(!JDB){setStatus('⚠ 서버 연결 실패 · 인터넷 확인');return;}
+  S.myId=DRIVERS_COL+'_'+(S.phone.replace(/\D/g,''));   // 번호 기반 고유 ID
+  pushDriver();
+  listenIncomingCalls();                                 // 호출 알림 수신 시작
+  if(S.pushTimer)clearInterval(S.pushTimer);
+  S.pushTimer=setInterval(()=>{if(S.sharing)pushDriver();},20000); // 20초마다 갱신
+  document.getElementById('reqCount').textContent='노출 중';
+  document.getElementById('reqList').innerHTML='<div class="empty">발주자에게 내 위치가 노출되고 있습니다.<br>호출이 오면 여기에 알림이 표시됩니다.</div>';
+}
+function pushDriver(){
+  if(!JDB||!S.me||!S.myId)return;
+  JDB.collection(DRIVERS_COL).doc(S.myId).set({
+    name:(S.phone.replace(/\D/g,'').slice(-4))+' 기사',
+    phone:S.phone.replace(/\D/g,''),
+    equip:S.equip, icon:S.equipIcon||eqIcon(S.equip),
+    lat:S.me.lat, lng:S.me.lng,
+    active:S.sharing,
+    ts:Date.now()
+  }).catch(e=>console.warn('등록 실패',e));
+}
+function removeDriver(){
+  if(!JDB||!S.myId)return;
+  JDB.collection(DRIVERS_COL).doc(S.myId).delete().catch(()=>{});
+}
+
+/* ========== 발주자 모드: 활성 기사 실시간 구독 ========== */
+function startClientMode(){
+  if(!JDB){setStatus('⚠ 서버 연결 실패 · 인터넷 확인');return;}
+  subscribeDrivers();
+}
+function subscribeDrivers(){
+  if(S.unsub){S.unsub();S.unsub=null;}
+  S.unsub=JDB.collection(DRIVERS_COL).where('active','==',true)
+    .onSnapshot(snap=>{
+      const cutoff=Date.now()-ACTIVE_MIN*60*1000;
+      S.driverMarkers.forEach(m=>{try{S.map.removeLayer(m);}catch(e){}});S.driverMarkers=[];
+      S.drivers=[];
+      snap.forEach(doc=>{
+        const d=doc.data();
+        if(!d.ts||d.ts<cutoff)return;          // 오래된 기사 제외
+        if(S.phone&&d.phone===S.phone.replace(/\D/g,''))return; // 본인 제외
+        const km=S.me?dist(S.me,{lat:d.lat,lng:d.lng}):0;
+        S.drivers.push({id:doc.id,name:d.name,equip:d.equip,icon:d.icon||eqIcon(d.equip),lat:d.lat,lng:d.lng,phone:d.phone,km});
+        const mk=L.marker([d.lat,d.lng],{icon:L.divIcon({className:'',html:svgPin(d.icon||eqIcon(d.equip),34),iconSize:[38,30],iconAnchor:[19,26]})}).addTo(S.map);
+        mk.on('click',()=>S.map.setView([d.lat,d.lng],16));S.driverMarkers.push(mk);
+      });
+      S.drivers.sort((a,b)=>a.km-b.km);renderDrivers();
+    },err=>{console.warn('구독 오류',err);setStatus('⚠ 데이터 불러오기 실패');});
+}
+function renderDrivers(){
+  document.getElementById('dCount').textContent=S.drivers.length+'대';
+  const wrap=document.getElementById('driverList');
+  if(!S.drivers.length){wrap.innerHTML='<div class="empty">주변에 운행 중인 기사가 없습니다.<br>잠시 후 다시 확인해 주세요.</div>';return;}
+  wrap.innerHTML=S.drivers.map(d=>`<div class="driver"><div class="av"><svg viewBox="0 0 80 56"><use href="#${d.icon}"/></svg></div><div class="di"><div class="nm">${d.name}<span class="badge">${d.equip}</span></div><div class="meta"><span class="dist">${fmtDist(d.km)}</span><span>즉시 운행</span></div></div><div class="dbtns"><button class="ring" onclick="ringDriver('${d.id}','${d.equip}',${d.km.toFixed(2)})">🔔 호출</button><button class="call" onclick="callDriver('${d.phone}','${d.name}')">📞 통화</button></div></div>`).join('');
+}
+function rescan(){
+  document.getElementById('driverList').innerHTML='<div class="empty"><span class="spin"></span> 주변 기사 검색 중…</div>';
+  if(JDB)subscribeDrivers();
+}
+function callDriver(phone,name){
+  const f=phone.replace(/(\d{3})(\d{4})(\d{4})/,'$1-$2-$3');
+  if(confirm(`${name}님에게 전화 연결할까요?\n${f}`))location.href='tel:'+phone;
+}
+
+/* ========== 발주자: 기사에게 호출 알림 보내기 ========== */
+function ringDriver(driverId,equip,km){
+  if(!JDB){alert('서버 연결 실패 · 인터넷을 확인해 주세요');return;}
+  const myPhone=S.phone.replace(/\D/g,'');
+  const callId=CALLS_COL+'_'+myPhone+'_'+Date.now();
+  JDB.collection(CALLS_COL).doc(callId).set({
+    driverId, equip,
+    clientPhone:myPhone,
+    km:Number(km),
+    status:'ringing',     // ringing → accepted / rejected
+    ts:Date.now()
+  }).then(()=>{
+    watchMyOutgoingCall(callId,equip);
+    toastCall(`🔔 호출을 보냈습니다 · 기사 응답을 기다리는 중…`);
+  }).catch(e=>{console.warn('호출 실패',e);alert('호출 전송 실패');});
+}
+function watchMyOutgoingCall(callId,equip){
+  if(S.outCallUnsub){S.outCallUnsub();S.outCallUnsub=null;}
+  S.outCallUnsub=JDB.collection(CALLS_COL).doc(callId).onSnapshot(doc=>{
+    if(!doc.exists)return;
+    const c=doc.data();
+    if(c.status==='accepted'){
+      toastCall(`✅ ${equip} 기사가 수락했습니다! 곧 전화가 올 수 있어요.`,true);
+      if(S.outCallUnsub){S.outCallUnsub();S.outCallUnsub=null;}
+    }else if(c.status==='rejected'){
+      toastCall(`❌ 기사가 호출을 거절했습니다. 다른 기사를 호출해 보세요.`,true);
+      if(S.outCallUnsub){S.outCallUnsub();S.outCallUnsub=null;}
+    }
+  });
+}
+function toastCall(msg,autohide){
+  let el=document.getElementById('callToast');
+  if(!el){el=document.createElement('div');el.id='callToast';el.className='call-toast';document.body.appendChild(el);}
+  el.innerHTML=msg;el.classList.add('on');
+  clearTimeout(el._t);
+  if(autohide)el._t=setTimeout(()=>el.classList.remove('on'),3500);
+}
+
+/* ========== 기사: 나에게 온 호출 실시간 수신 ========== */
+function listenIncomingCalls(){
+  if(!JDB||!S.myId)return;
+  if(S.callUnsub){S.callUnsub();S.callUnsub=null;}
+  S.callUnsub=JDB.collection(CALLS_COL)
+    .where('driverId','==',S.myId).where('status','==','ringing')
+    .onSnapshot(snap=>{
+      const cutoff=Date.now()-CALL_TTL*1000;
+      snap.forEach(doc=>{
+        const c=doc.data();
+        if(!c.ts||c.ts<cutoff)return;          // 오래된 호출 무시
+        if(S.shownCalls[doc.id])return;         // 이미 표시한 호출
+        S.shownCalls[doc.id]=true;
+        showIncomingCall(doc.id,c);
+      });
+    },err=>console.warn('호출 수신 오류',err));
+}
+function showIncomingCall(callId,c){
+  if(!S.sharing)return;
+  document.getElementById('reqCount').textContent='호출 1건!';
+  document.getElementById('reqCount').style.color='var(--ok-d)';
+  const box=document.createElement('div');box.className='reqbox';box.id='rq_'+callId;
+  box.innerHTML=`<div class="rt">🔔 새 호출 · ${c.equip} 요청</div>
+    <div class="rm">발주자가 <b style="color:var(--ok-d)">${fmtDist(c.km)}</b> 거리에서<br>${c.equip} 운행을 요청했습니다.</div>
+    <div class="ra"><button class="acc" onclick="acceptCall('${callId}','${c.clientPhone}')">수락 · 통화</button>
+    <button class="rej" onclick="rejectCall('${callId}')">거절</button></div>`;
+  const list=document.getElementById('reqList');
+  const empty=list.querySelector('.empty');if(empty)empty.remove();
+  list.prepend(box);
+  // 진동 (지원 기기)
+  if(navigator.vibrate)navigator.vibrate([200,100,200]);
+}
+function acceptCall(callId,clientPhone){
+  if(JDB)JDB.collection(CALLS_COL).doc(callId).update({status:'accepted'}).catch(()=>{});
+  const box=document.getElementById('rq_'+callId);if(box)box.remove();
+  refreshReqEmpty();
+  const f=clientPhone.replace(/(\d{3})(\d{4})(\d{4})/,'$1-$2-$3');
+  if(confirm(`발주자에게 전화 연결할까요?\n${f}`))location.href='tel:'+clientPhone;
+}
+function rejectCall(callId){
+  if(JDB)JDB.collection(CALLS_COL).doc(callId).update({status:'rejected'}).catch(()=>{});
+  const box=document.getElementById('rq_'+callId);if(box)box.remove();
+  refreshReqEmpty();
+}
+function refreshReqEmpty(){
+  const list=document.getElementById('reqList');
+  if(!list.querySelector('.reqbox')){
+    document.getElementById('reqCount').textContent='노출 중';
+    document.getElementById('reqCount').style.color='';
+    list.innerHTML='<div class="empty">발주자에게 내 위치가 노출되고 있습니다.<br>호출이 오면 여기에 알림이 표시됩니다.</div>';
+  }
+}
+
+/* ========== 기사 위치공유 ON/OFF ========== */
+function toggleShare(){
+  S.sharing=!S.sharing;document.getElementById('shareSw').classList.toggle('on',S.sharing);
+  document.getElementById('shareSub').textContent=S.sharing?'발주자에게 내 위치를 노출합니다':'위치 공유가 꺼져 호출을 받지 않습니다';
+  if(S.meMarker)S.meMarker.setOpacity(S.sharing?1:.35);
+  if(S.sharing){
+    pushDriver();
+    document.getElementById('reqCount').textContent='노출 중';
+    document.getElementById('reqList').innerHTML='<div class="empty">발주자에게 내 위치가 노출되고 있습니다.<br>호출이 오면 발주자가 직접 전화합니다.</div>';
+  }else{
+    // active=false 로 표시 (발주자 화면에서 사라짐)
+    if(JDB&&S.myId)JDB.collection(DRIVERS_COL).doc(S.myId).update({active:false}).catch(()=>{});
+    document.getElementById('reqCount').textContent='꺼짐';
+    document.getElementById('reqCount').style.color='';
+    document.getElementById('reqList').innerHTML='<div class="empty">위치 공유가 꺼져 있습니다.<br>다시 켜면 발주자에게 노출되고 호출을 받습니다.</div>';
+  }
+}
+function syncSheetHeight(){const sh=S.role==='client'?document.getElementById('clientSheet'):document.getElementById('driverSheet');document.documentElement.style.setProperty('--sheet-h',(sh?sh.offsetHeight:200)+'px');}
+window.addEventListener('resize',()=>{if(S.map)S.map.invalidateSize();syncSheetHeight();});
+</script>
+</body>
+</html>
